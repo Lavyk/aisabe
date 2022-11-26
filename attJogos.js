@@ -1,6 +1,9 @@
+// SELECT DATETIME(DateUtc), MatchNumber, HomeTeam, AwayTeam FROM Jogos WHERE DATETIME(DateUtc) > DATETIME(DATETIME('NOW', '-5 HOURS'), '-5 MINUTES') LIMIT 1;
+
 const sqlite3 = require('sqlite3').verbose();
 var moment = require('moment');
 const axios = require('axios');
+const schedule = require('node-schedule');
 
 let db = new sqlite3.Database('./db/dados.db3', sqlite3.OPEN_READWRITE, (err) => {
   if (err) {
@@ -28,25 +31,62 @@ axios({
 });;
 
 function setToken(token) {
-  var idJogoAtual = 24;
-  
-  var urlRequest = 'http://api.cup2022.ir/api/v1/match/' + idJogoAtual;
-  setInterval(() => {
-    axios({
-      method: 'GET',
-      url: urlRequest,
-      headers: { "Authorization": `Bearer ${token}` }
-    }).then(res => {
-      const headerDate = res.headers && res.headers.date ? res.headers.date : 'no response date';
-      if (res.status == 200) {
-        var gol1 = res.data.data[0].home_score;
-        var gol2 = res.data.data[0].away_score;
-        console.log(`${gol1}x${gol2}`);
-      }
-    }).catch(err => {
-      console.log('Error: ', err.message);
-    });;
-  }, 10000);
+  let time = 0;
+  atualizarPlacar();
+
+  function atualizarPlacar() {
+    setTimeout(() => {
+      db.serialize(() => {
+        db.get(`SELECT DATETIME(DateUtc) AS DataHora, MatchNumber, HomeTeamScore, AwayTeamScore FROM Jogos WHERE DATETIME(DateUtc) > DATETIME(DATETIME('NOW', '-5 HOURS'), '-5 MINUTES') LIMIT 1;`, (err, jogo) => {
+          if (err) {
+            console.error(err.message);
+          }
+          if (moment().isAfter(jogo.DataHora)) {
+            // Jogo inciado
+            // Verifica o placar atualizado
+            var urlRequest = 'http://api.cup2022.ir/api/v1/match/' + jogo.MatchNumber;
+            axios({
+              method: 'GET',
+              url: urlRequest,
+              headers: { "Authorization": `Bearer ${token}` }
+            }).then(res => {
+              const headerDate = res.headers && res.headers.date ? res.headers.date : 'no response date';
+              if (res.status == 200) {
+                var gol1 = res.data.data[0].home_score;
+                var gol2 = res.data.data[0].away_score;
+                if (jogo.HomeTeamScore != gol1 || jogo.AwayTeamScore != gol2) {
+                  db.run(`UPDATE Jogos SET HomeTeamScore = ${gol1}, AwayTeamScore = ${gol2} WHERE MatchNumber = ${jogo.MatchNumber}`)
+                  console.log(`Atualização de placar ${jogo.MatchNumber}: ${gol1}x${gol2}`);
+                }
+              }
+            }).catch(err => {
+              console.log('Error: ', err.message);
+            });
+
+
+            atualizarPlacar();
+          } else {
+            // Jogo não iniciado
+            var horaJogo = moment(jogo.DataHora);
+            const dataInicioJogo = new Date(horaJogo);
+            console.log(dataInicioJogo);
+            const job = schedule.scheduleJob(dataInicioJogo, function () {
+              console.log(`Jogo ${jogo.MatchNumber} iniciado.`);
+              time = 60000;
+              job.cancel();
+              atualizarPlacar();
+            });
+
+            console.log(`Jogo ${jogo.MatchNumber} agendado para iniciar a atualização automatica em ${dataInicioJogo}`);
+
+            time = 86400000;
+          }
+        });
+      });
+
+
+    }, time);
+  }
 }
 
 // db.serialize(() => {
