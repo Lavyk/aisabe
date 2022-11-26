@@ -26,7 +26,23 @@ let db = new sqlite3.Database('./db/dados.db3', sqlite3.OPEN_READWRITE, (err) =>
 });
 
 client.on('message', message => {
+  if (message.from == '558399506299-1405780291@g.us' && (message.body.toLowerCase().includes("raio") || message.body.includes("⚡"))) {
+    db.serialize(() => {
+      let sql = `SELECT Valor FROM Outros WHERE Key = 'Raio';`;
 
+      db.get(sql, (err, row) => {
+        if (err) {
+          return console.error(err.message);
+        }
+        db.run("UPDATE Outros SET Valor = (Valor + 1) WHERE Key = 'Raio'", function (err) {
+          if (err) {
+            return console.error(err.message);
+          }
+        });
+        message.reply(`⚡ Um integrante desse grupo já deu mais ou menos uns ${row.Valor + 1} raios.`)
+      });
+    });
+  }
   if (message.body === '/proximojogo') {
     getJogo(client, message, true);
   }
@@ -67,13 +83,30 @@ client.on('message', message => {
   }
 
   if (message.body === '/tabela') {
-    atualizarTabela();
+    // atualizarTabela();
     db.serialize(() => {
-      var sqlJogos = `SELECT * FROM Usuarios ORDER BY Pontos DESC`;
+      var sqlJogos = `SELECT Usuarios.Apelido, Usuarios.Codigo,
+      SUM(CASE WHEN 
+              Palpites.MatchNumber = Jogos.MatchNumber AND
+              Palpites.GolsHomeTime = Jogos.HomeTeamScore AND
+              Palpites.GolsForaTime = Jogos.AwayTeamScore AND
+              Usuarios.Codigo = Palpites.CodUsuario
+          THEN 1 ELSE 0 END) Pontos
+      
+      FROM Usuarios
+      INNER JOIN Palpites ON Palpites.CodUsuario = Usuarios.Codigo
+      INNER JOIN Jogos ON Jogos.MatchNumber = Palpites.MatchNumber
+      GROUP BY Usuarios.Codigo
+      ORDER BY Pontos DESC`;
+
       db.all(sqlJogos, (err, rows) => {
         if (err) {
           console.error(err.message);
         }
+        rows.forEach((usuario) => {
+          var sql = `UPDATE Usuarios SET Pontos = ${rows[0]} WHERE Codigo = '${rows["Codigo"]}'`;
+          db.run(`UPDATE Usuarios SET Pontos = ${usuario.Pontos} WHERE Codigo = '${usuario.Codigo}'`);
+        });
         var r = "🏆 Troféu Ai Sabe 🏆\n\n";
         r += "*Tabela de pontos*\n";
         var countPos = 0;
@@ -93,7 +126,31 @@ client.on('message', message => {
   }
 
   if (message.body === '/jogosdia') {
-    getJogo(client, message, true, undefined, true)
+    // getJogo(client, message, true, undefined, true)
+    db.serialize(() => {
+      let sql = "SELECT * FROM Jogos WHERE DATE(DateUtc) = DATE('now')";
+      db.all(sql, (err, row) => {
+        if (err) {
+          console.error(err.message);
+        }
+
+        var r = "🏆 Troféu Ai Sabe 🏆\n\n";
+        row.forEach((row) => {
+
+          r += getBandeira(row.HomeTeam) + " " + row.HomeTeam;
+
+          if (row.HomeTeamScore != null) r += ` ${row.HomeTeamScore} x ${row.AwayTeamScore} `;
+          else r += " x ";
+
+          r += row.AwayTeam + " " + getBandeira(row.AwayTeam);
+
+          r += "\n🗓️ " + moment(row.DateUtc).format("DD/MM/YYYY [às] HH:mm");
+          r += "\n🆔 " + row.MatchNumber;
+          r += "\n\n"
+        });
+        message.reply(r);
+      });
+    });
   }
 
   if (message.body.startsWith('/c ')) {
@@ -153,8 +210,9 @@ client.on('message', message => {
 
         if (row == undefined) return message.reply("Esse jogo não existe, use o comando */jogos* para ver todos os jogos disponiveis.");
 
-        if (moment().format('YYYY-MM-DD') != moment(row.DateUtc).format('YYYY-MM-DD')) return message.reply("❌ Os palpites para esse jogo ainda não foram aberto.\n\n⚠️ Você só pode palpitar nos jogos do dia.\nUse */jogosdia* para saber quais jogos estão abertos.");
-
+        if (!moment().isAfter(moment(row.DateUtc).subtract(12, 'hours'))) {
+          return message.reply("❌ Os palpites para esse jogo ainda não foram aberto.\n\nOs palpites abrem em " + moment(row.DateUtc).subtract(12, 'hours').format('DD/MM/YYYY [às] HH:mm') + "\n\n⚠️ Você só pode palpitar nos jogos do dia.\nUse */jogosdia* para saber quais jogos estão abertos.");
+        }
         if (moment() > moment(row.DateUtc)) return message.reply("⚠️ O jogo já começou, infelizmente os palpites estão encerrados.");
 
         db.get(`SELECT * FROM Usuarios WHERE Codigo = '${user}'`, (err, row) => {
@@ -175,7 +233,7 @@ client.on('message', message => {
                   // get the last insert id
                   console.log(`${moment()} - Palpite [${user}]`);
                   message.reply(`✅ Palpite para o jogo foi cadastrado.\nTorça pra acertar.`);
-                  getJogo(client, message, false);
+                  getJogo(client, message, false, idJogo);
                 });
               } else {
                 var sql = `UPDATE Palpites SET GolsHomeTime =  ${placar1}, GolsForaTime = ${placar2} WHERE CodUsuario = '${user}' AND MatchNumber = ${idJogo}`;
@@ -186,7 +244,7 @@ client.on('message', message => {
                   // get the last insert id
                   console.log(`${moment()} - Palpite [${user}]`);
                   message.reply(`✅ Palpite para o próximo jogo foi atualizado.`);
-                  getJogo(client, message, false);
+                  getJogo(client, message, false, idJogo);
                 });
               }
             });
@@ -253,8 +311,91 @@ client.on('message', message => {
     });
   }
 
+  if (message.body.startsWith('/minhasbets')) {
+    db.serialize(() => {
+      var user = message.author != undefined ? user = message.author : user = message.from;
+
+      let sql = `SELECT 
+      (SELECT Apelido FROM Usuarios WHERE Codigo = '${user}') AS Apelido,
+      MatchNumber, Jogos.HomeTeam, Jogos.AwayTeam, Jogos.HomeTeamScore, Jogos.AwayTeamScore, Jogos.DateUtc,
+      (SELECT GolsHomeTime FROM Palpites WHERE CodUsuario = '${user}' AND Palpites.MatchNumber = Jogos.MatchNumber ) AS GolsHomeTime,
+      (SELECT GolsForaTime FROM Palpites WHERE CodUsuario = '${user}' AND Palpites.MatchNumber = Jogos.MatchNumber ) AS GolsForaTime
+      FROM Jogos WHERE DATE(DateUtc) <= DATE('now', '-3 hour');`;
+
+      db.all(sql, (err, row) => {
+        if (err) {
+          console.error(err.message);
+        }
+
+        var r = "🏆 Troféu Ai Sabe 🏆\n\n";
+        var palpites = '\n\n*Palpites:*';
+        var naoPalpitadosGeral = "\n*Não palpitou em:*"
+        var palpitesAbertos = '\n\n*Palpites em aberto:*';
+        var naoPalpitados = '\n\n*Ainda não palpitados:*';
+
+        var contJogos = row.length;
+        var pontos = 0;
+        var contApostas = 0;
+
+        row.forEach((rowJogo) => {
+          contApostas++;
+          if (moment().isAfter(rowJogo.DateUtc)) {
+            if (rowJogo.GolsHomeTime != null) {
+              palpites += '\n';
+              if (rowJogo.GolsHomeTime == rowJogo.HomeTeamScore && rowJogo.GolsForaTime == rowJogo.AwayTeamScore) {
+                palpites += "✅ ";
+                pontos++;
+              } else {
+                palpites += "❌ ";
+              }
+              palpites += getBandeira(rowJogo.HomeTeam) + " " + rowJogo.HomeTeam;
+              palpites += ` ${rowJogo.GolsHomeTime} x ${rowJogo.GolsForaTime} `;
+              palpites += rowJogo.AwayTeam + " " + getBandeira(rowJogo.AwayTeam);
+            } else {
+              naoPalpitadosGeral += '\n';
+              naoPalpitadosGeral += "🤦‍♂️ ";
+              naoPalpitadosGeral += getBandeira(rowJogo.HomeTeam) + " " + rowJogo.HomeTeam;
+              naoPalpitadosGeral += ` x `;
+              naoPalpitadosGeral += rowJogo.AwayTeam + " " + getBandeira(rowJogo.AwayTeam);
+            }
+          } else {
+            if (rowJogo.GolsHomeTime != null) {
+              palpitesAbertos += '\n';
+              palpitesAbertos += "➡️ ";
+              palpitesAbertos += getBandeira(rowJogo.HomeTeam) + " " + rowJogo.HomeTeam;
+              palpitesAbertos += ` ${rowJogo.GolsHomeTime} x ${rowJogo.GolsForaTime} `;
+              palpitesAbertos += rowJogo.AwayTeam + " " + getBandeira(rowJogo.AwayTeam);
+            } else {
+              naoPalpitados += "\n";
+              naoPalpitados += getBandeira(rowJogo.HomeTeam) + " " + rowJogo.HomeTeam;
+              naoPalpitados += " x ";
+              naoPalpitados += rowJogo.AwayTeam + " " + getBandeira(rowJogo.AwayTeam);
+
+              naoPalpitados += "\n🗓️ " + moment(rowJogo.DateUtc).format("DD/MM/YYYY [às] HH:mm");
+              naoPalpitados += "\n🆔 " + rowJogo.MatchNumber;
+              naoPalpitados += "\n\n"
+            }
+          }
+        });
+
+        r += "*Estatísticas:*\n"
+        r += `${row[0].Apelido} tem ${pontos} pontos, palpitou em ${Math.round((contApostas / contJogos) * 100)}% dos jogos e acertou em ${Math.round((pontos / contJogos) * 100)}% deles.`
+
+        r += palpites;
+        r += naoPalpitadosGeral;
+        r += palpitesAbertos;
+        r += naoPalpitados;
+
+        message.reply(r);
+      });
+    });
+  }
+
   // Admin
   if (message.body.startsWith('/attjogo ')) {
+    var user = message.author != undefined ? user = message.author : user = message.from;
+    let admins = "558386768721@c.us;558381881161@c.us";
+    if (!admins.includes(user)) return;
     let tmp = message.body.toLowerCase().split(' ');
     if (tmp.length != 3) return message.reply(`❌ Ta faltando alguma informação ai, tem que ter 'ID' e o placar com dois números separados por X.\nExemplo /bet ${idJogo} 1x1`);
 
@@ -286,12 +427,11 @@ client.on('message', message => {
 
 function atualizarTabela() {
   db.serialize(() => {
-    var sqlJogos = `SELECT Codigo FROM Usuarios `;
+    var sqlJogos = `SELECT Codigo FROM Usuarios`;
     db.all(sqlJogos, (err, rowsUsers) => {
       if (err) {
         console.error(err.message);
       }
-
       rowsUsers.forEach((rowUser) => {
         db.all(`SELECT MatchNumber, GolsHomeTime, GolsForaTime FROM Palpites WHERE CodUsuario = '${rowUser.Codigo}'`, (err, rowsPalpites) => {
           if (err) {
@@ -324,7 +464,7 @@ function atualizarTabela() {
 
 function getJogo(client, message, reply, idJogo, data) {
   db.serialize(() => {
-    var sql = idJogo == undefined ? `SELECT * FROM Jogos WHERE date(DateUtc) >= date('now') ORDER BY DateUtc LIMIT 1` : `SELECT * FROM Jogos WHERE MatchNumber = ${idJogo}`
+    var sql = idJogo == undefined ? `SELECT * FROM Jogos WHERE DATETIME(DateUtc) >= DATETIME('now', '-3 hour') ORDER BY DateUtc LIMIT 1` : `SELECT * FROM Jogos WHERE MatchNumber = ${idJogo}`
     if (data == true) sql = `SELECT * FROM Jogos WHERE DATE(DateUtc) = DATE('now')`;
     console.log(sql)
     db.all(sql, (err, row) => {
@@ -360,7 +500,7 @@ function getJogo(client, message, reply, idJogo, data) {
 
           r += "\n\n*Palpites:*\n";
           if (rows.length == 0) {
-            
+
             if (moment().isAfter(row.DateUtc)) {
               r += `_Ninguém palpitou nesse jogo._ 🤡\n`;
             } else {
@@ -372,10 +512,18 @@ function getJogo(client, message, reply, idJogo, data) {
 
               if (moment().isAfter(row.DateUtc)) {
                 if (rowPalpite.GolsHomeTime < row.HomeTeamScore || rowPalpite.GolsForaTime < row.AwayTeamScore) {
-                  r += "~";
+                  r += "❌ ~";
+                } else if (rowPalpite.GolsHomeTime == row.HomeTeamScore && rowPalpite.GolsForaTime == row.AwayTeamScore) {
+                  r += "✅ ";
+                } else {
+                  r += "➡️ ";
                 }
+              } else {
+                r += "➡️ ";
               }
+
               r += `${rowPalpite.Apelido} - ${rowPalpite.GolsHomeTime} x ${rowPalpite.GolsForaTime}`;
+
               if (moment().isAfter(row.DateUtc)) {
                 if (rowPalpite.GolsHomeTime < row.HomeTeamScore || rowPalpite.GolsForaTime < row.AwayTeamScore) {
                   r += "~";
@@ -426,6 +574,7 @@ function AiSabe(message) {
 function getBandeira(time) {
   var bandeira = "";
   switch (time) {
+    case "England": bandeira = "🏴󠁧󠁢󠁥󠁮󠁧󠁿"; break;
     case "Andorra": bandeira = "🇦🇩"; break;
     case "United Arab Emirates": bandeira = "🇦🇪"; break;
     case "Afghanistan": bandeira = "🇦🇫"; break;
