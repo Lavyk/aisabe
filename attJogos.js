@@ -28,10 +28,10 @@ axios({
   }
 }).catch(err => {
   console.log('Error: ', err.message);
-});;
+});
 
 function setToken(token) {
-  let time = 0;
+  let time = 30000;
   atualizarPlacar();
 
   function atualizarPlacar() {
@@ -55,8 +55,14 @@ function setToken(token) {
                 var gol1 = res.data.data[0].home_score;
                 var gol2 = res.data.data[0].away_score;
                 if (jogo.HomeTeamScore != gol1 || jogo.AwayTeamScore != gol2) {
-                  db.run(`UPDATE Jogos SET HomeTeamScore = ${gol1}, AwayTeamScore = ${gol2} WHERE MatchNumber = ${jogo.MatchNumber}`)
-                  console.log(`Atualização de placar ${jogo.MatchNumber}: ${gol1}x${gol2}`);
+                  var sql = `UPDATE Jogos SET HomeTeamScore = ${gol1}, AwayTeamScore = ${gol2} WHERE MatchNumber = ${jogo.MatchNumber}`;
+                  db.run(sql, (err) => {
+                    if (err) {
+                      console.error(err.message);
+                    }
+                    console.log(sql);
+                    console.log(`Atualização de placar ${jogo.MatchNumber}: ${gol1}x${gol2}`);
+                  })
                 }
               }
             }).catch(err => {
@@ -72,7 +78,7 @@ function setToken(token) {
             console.log(dataInicioJogo);
             const job = schedule.scheduleJob(dataInicioJogo, function () {
               console.log(`Jogo ${jogo.MatchNumber} iniciado.`);
-              time = 60000;
+              time = 30000;
               job.cancel();
               atualizarPlacar();
             });

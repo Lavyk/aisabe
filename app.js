@@ -1,10 +1,23 @@
 const qrcode = require('qrcode-terminal');
 const sqlite3 = require('sqlite3').verbose();
 var moment = require('moment');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const axios = require('axios');
+const schedule = require('node-schedule');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const WAWebJS = require('whatsapp-web.js');
+
+let time = 20000;
+let token = '';
 
 const client = new Client({
   authStrategy: new LocalAuth({ clientId: "client-one" })
+});
+
+let db = new sqlite3.Database('./db/dados.db3', sqlite3.OPEN_READWRITE, (err) => {
+  if (err) {
+    console.error(err.message);
+  }
+  console.log('Connected to the database.');
 });
 
 client.on('qr', qr => {
@@ -16,14 +29,6 @@ client.on('ready', () => {
 });
 
 client.initialize();
-
-
-let db = new sqlite3.Database('./db/dados.db3', sqlite3.OPEN_READWRITE, (err) => {
-  if (err) {
-    console.error(err.message);
-  }
-  console.log('Connected to the database.');
-});
 
 client.on('message', message => {
   if (message.from == '558399506299-1405780291@g.us' && (message.body.toLowerCase().includes("raio") || message.body.includes("⚡"))) {
@@ -43,6 +48,12 @@ client.on('message', message => {
       });
     });
   }
+
+  if (message.from == '558399506299-1405780291@g.us' && (message.body.toLowerCase().includes("burro") || message.body.toLowerCase().includes("jumento") || message.body.toLowerCase().includes("lula"))) {
+    const fig = MessageMedia.fromFilePath('lula.webp');
+    client.sendMessage(message.from, fig, { sendMediaAsSticker: true });
+  }
+
   if (message.body === '/proximojogo') {
     getJogo(client, message, true);
   }
@@ -59,15 +70,49 @@ client.on('message', message => {
     getJogo(client, message, true, idJogo)
   }
 
-  if (message.body === '/jogos') {
+  if (message.body == '/jogo' || message.body == '/j') {
     db.serialize(() => {
-      var sqlJogos = `SELECT * FROM Jogos `;
+      db.each(`SELECT DATETIME(DateUtc) AS DataHora, MatchNumber, HomeTeamScore, AwayTeamScore FROM Jogos WHERE DATETIME(DateUtc) > DATETIME(DATETIME('NOW', '-5 HOURS'), '-5 MINUTES') LIMIT 2;`, (err, jogo) => {
+        if (err) {
+          console.error(err.message);
+        }
+        getJogo(client, message, true, jogo.MatchNumber)
+      });
+    });
+  }
+
+  // if (message.body === '/jogos') {
+  //   db.serialize(() => {
+  //     var sqlJogos = `SELECT * FROM Jogos `;
+  //     db.all(sqlJogos, (err, rows) => {
+  //       if (err) {
+  //         console.error(err.message);
+  //       }
+  //       var r = "🏆 Troféu Ai Sabe 🏆\n\n";
+  //       r += "\n\n*Jogos:*\n";
+
+  //       rows.forEach((row) => {
+  //         if (getBandeira(row.HomeTeam) != '') {
+  //           r += getBandeira(row.HomeTeam) + " " + row.HomeTeam + " x " + row.AwayTeam + " " + getBandeira(row.AwayTeam);
+  //           r += "\n🗓️ " + moment(row.DateUtc).format("DD/MM/YYYY [às] HH:mm");
+  //           r += "\n🆔 " + row.MatchNumber + "\n\n";
+  //         }
+  //       });
+
+  //       message.reply(r);
+  //     });
+  //   });
+  // }
+
+  if (message.body === '/oitavas') {
+    db.serialize(() => {
+      var sqlJogos = `SELECT * FROM Jogos WHERE RoundNumber = 4`;
       db.all(sqlJogos, (err, rows) => {
         if (err) {
           console.error(err.message);
         }
         var r = "🏆 Troféu Ai Sabe 🏆\n\n";
-        r += "\n\n*Jogos:*\n";
+        r += "\n\n*Oitavas*\n";
 
         rows.forEach((row) => {
           if (getBandeira(row.HomeTeam) != '') {
@@ -462,7 +507,7 @@ function atualizarTabela() {
   });
 }
 
-function getJogo(client, message, reply, idJogo, data) {
+function getJogo(client, message, reply, idJogo, data, grupo) {
   db.serialize(() => {
     var sql = idJogo == undefined ? `SELECT * FROM Jogos WHERE DATETIME(DateUtc) >= DATETIME('now', '-3 hour') ORDER BY DateUtc LIMIT 1` : `SELECT * FROM Jogos WHERE MatchNumber = ${idJogo}`
     if (data == true) sql = `SELECT * FROM Jogos WHERE DATE(DateUtc) = DATE('now')`;
@@ -537,8 +582,14 @@ function getJogo(client, message, reply, idJogo, data) {
             r += `\n\n*Exemplo - /bet ${row.MatchNumber} 1x0*`;
           }
 
-          if (reply == true) message.reply(r);
-          else client.sendMessage(message.from, r);
+          if (reply == true) { message.reply(r); }
+          else {
+            if (grupo == null && message != null) {
+              client.sendMessage(message.from, r);
+            } else {
+              client.sendMessage(grupo, r);
+            }
+          }
         });
       });
     });
@@ -832,4 +883,96 @@ function getBandeira(time) {
 
 function isNumeric(value) {
   return /^-?\d+$/.test(value);
+}
+
+function atualizarPlacar() {
+  setTimeout(() => {
+    db.serialize(() => {
+
+      db.all(`SELECT DATETIME(DateUtc) AS DataHora, MatchNumber, HomeTeam, AwayTeam, HomeTeamScore, AwayTeamScore FROM Jogos WHERE DATETIME(DateUtc) > DATETIME(DATETIME('NOW', '-5 HOURS'), '-5 MINUTES') LIMIT 2;`, (err, jogos) => {
+        if (err) {
+          console.error(err.message);
+        }
+
+        for (var jogo = 0; jogo < jogos.length; jogo++) {
+
+          //jogos.forEach((jogo) => {
+
+          if (moment().isAfter(jogos[jogo].DataHora) && token != '') {
+            // Jogo inciado
+            // Verifica o placar atualizado
+            var urlRequest = 'http://api.cup2022.ir/api/v1/match/' + jogos[jogo].MatchNumber;
+            axios({
+              method: 'GET',
+              url: urlRequest,
+              headers: { "Authorization": `Bearer ${token}` }
+            }).then(res => {
+              const headerDate = res.headers && res.headers.date ? res.headers.date : 'no response date';
+              if (res.status == 200) {
+                var gol1 = res.data.data[0].home_score;
+                var gol2 = res.data.data[0].away_score;
+                if (jogos[jogo].HomeTeamScore != gol1 || jogos[jogo].AwayTeamScore != gol2) {
+                  if (jogos[jogo].HomeTeamScore != gol1 && gol1 != 0) {
+                    var msg = `⚽ Acabou de sair gol da ${getBandeira(jogos[jogo].HomeTeam)} ${jogos[jogo].HomeTeam}, veja como estão os palpites 👇`;
+                    client.sendMessage("558399506299-1405780291@g.us", msg);
+                  } else if (jogos[jogo].AwayTeamScore != gol2 && gol2 != 0) {
+                    var msg = `⚽ Acabou de sair gol da ${getBandeira(jogos[jogo].AwayTeam)} ${jogos[jogo].AwayTeam}, veja como estão os palpites 👇`;
+                    client.sendMessage("558399506299-1405780291@g.us", msg);
+                  }
+                  var sql = `UPDATE Jogos SET HomeTeamScore = ${gol1}, AwayTeamScore = ${gol2} WHERE MatchNumber = ${jogos[jogo].MatchNumber}`;
+                  db.run(sql, (err) => {
+                    if (err) {
+                      console.error(err.message);
+                    }
+                    getJogo(client, null, false, jogos[jogo].MatchNumber, false, "558399506299-1405780291@g.us");
+                    console.log(`Atualização de placar ${jogos[jogo].MatchNumber}: ${gol1}x${gol2}`);
+                  })
+                }
+              }
+            }).catch(err => {
+              console.log('Error: ', err.message);
+            });
+
+
+            atualizarPlacar(token);
+          } else {
+            // Jogo não iniciado
+            var horaJogo = moment(jogos[jogo].DataHora);
+            const dataInicioJogo = new Date(horaJogo);
+            console.log(dataInicioJogo);
+            const job = schedule.scheduleJob(dataInicioJogo, function () {
+              // console.log(`Jogo ${jogos[jogo].MatchNumber} iniciado.`);
+              time = 20000;
+              job.cancel();
+              if (jogo == 0) {
+                axios({
+                  method: 'post',
+                  url: 'http://api.cup2022.ir/api/v1/user/login',
+                  data: {
+                    email: 'lavyksoares@gmail.com',
+                    password: 'lavyk123'
+                  }
+                }).then(res => {
+                  const headerDate = res.headers && res.headers.date ? res.headers.date : 'no response date';
+                  console.log('API Resultados -> Status Code:', res.status);
+                  console.log('Novo token solicitado');
+                  if (res.status == 200) {
+                    token = res.data.data.token;
+                  }
+                }).catch(err => {
+                  console.log('Error: ', err.message);
+                });
+              }
+              atualizarPlacar(token);
+            });
+
+            getJogo(client, null, false, jogos[jogo].MatchNumber, false, "558399506299-1405780291@g.us");
+            console.log(`Jogo ${jogos[jogo].MatchNumber} agendado para iniciar a atualização automatica em ${dataInicioJogo}`);
+
+            time = 86400000;
+          }
+        };
+      });
+    });
+  }, time);
 }
