@@ -3,14 +3,18 @@ const sqlite3 = require('sqlite3').verbose();
 var moment = require('moment');
 const axios = require('axios');
 const schedule = require('node-schedule');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
-const WAWebJS = require('whatsapp-web.js');
+const { WAWebJS, Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+
+const pornModulo = require('./bot_modules/porn');
 
 let time = 20000;
 let token = '';
 
 const client = new Client({
-  authStrategy: new LocalAuth({ clientId: "client-one" })
+  authStrategy: new LocalAuth({ clientId: "client-one" }),
+  // puppeteer: {
+  //   executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  // }
 });
 
 let db = new sqlite3.Database('./db/dados.db3', sqlite3.OPEN_READWRITE, (err) => {
@@ -31,6 +35,11 @@ client.on('ready', () => {
 client.initialize();
 
 client.on('message', message => {
+
+  pornModulo.getVideo(client, message, db);
+
+  return;
+
   if (message.from == '558399506299-1405780291@g.us' && (message.body.toLowerCase().includes("raio") || message.body.includes("⚡"))) {
     db.serialize(() => {
       let sql = `SELECT Valor FROM Outros WHERE Key = 'Raio';`;
